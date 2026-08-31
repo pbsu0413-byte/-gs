@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import yfinance as yf
 import gs_quant.timeseries as ts
 from gs_quant.timeseries import Window
@@ -56,7 +57,7 @@ period = st.sidebar.selectbox("조회 기간", period_options, index=0)
 # --- 사이드바: 화면 표시 설정 (On/Off) ---
 st.sidebar.header("👁️ 화면 표시 설정")
 show_fundamental = st.sidebar.checkbox("주요 투자지표 (PER/PBR 등)", value=True)
-show_financials_table = st.sidebar.checkbox("상세 재무제표 표 표시", value=True)
+show_financials_table = st.sidebar.checkbox("상세 재무제표 표 표시", value=False)
 show_consensus = st.sidebar.checkbox("월가 컨센서스 (목표주가)", value=True)
 show_bollinger = st.sidebar.checkbox("볼린저 밴드 표시", value=True)
 show_macd = st.sidebar.checkbox("MACD 차트 표시", value=False)
@@ -92,11 +93,27 @@ if data.empty:
 close = data["Close"]
 volume = data["Volume"]
 
-# --- gs-quant 및 지표 계산 ---
-returns = ts.returns(close)
-volatility = ts.volatility(close, Window(vol_window, 0))
-moving_avg = ts.moving_average(close, ma_window)
-rsi = ts.relative_strength_index(close, 14)
+# --- 안전한 지표 계산 (분봉/일봉 에러 방지 분기) ---
+returns = close.pct_change()
+
+# 일봉일 때는 gs-quant 연율화 변동성 사용, 분봉일 때는 일반 표준편차 변동성 사용
+if interval == "1d":
+    try:
+        volatility = ts.volatility(close, Window(vol_window, 0))
+    except:
+        volatility = returns.rolling(window=vol_window).std() * np.sqrt(252) * 100
+else:
+    # 분봉의 경우 수익률 표준편차 계산
+    volatility = returns.rolling(window=vol_window).std() * 100
+
+moving_avg = close.rolling(window=ma_window).mean()
+
+# RSI 안전 계산
+delta = close.diff()
+gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+rs = gain / loss
+rsi = 100 - (100 / (1 + rs))
 
 # 볼린저 밴드
 std = close.rolling(window=ma_window).std()
@@ -162,7 +179,6 @@ if show_financials_table:
             df_fin = financials.loc[existing_items].copy()
             df_fin.columns = [col.strftime('%Y') if hasattr(col, 'strftime') else str(col) for col in df_fin.columns]
             
-            # Pandas 최신버전 호환성 수정 (applymap -> map / apply 호환 처리)
             def fmt_val(x):
                 if pd.notnull(x):
                     return f"₩{x/1e8:,.0f} 억" if is_korean_stock else f"${x/1e6:,.1f}M (₩{x*usd_krw/1e8:,.0f}억)"
@@ -194,12 +210,15 @@ col1, col2, col3, col4, col5 = st.columns(5)
 
 latest_close = close.iloc[-1]
 latest_vol = volume.iloc[-1]
+latest_ret = returns.iloc[-1] if not pd.isna(returns.iloc[-1]) else 0
+latest_v = volatility.iloc[-1] if not pd.isna(volatility.iloc[-1]) else 0
+latest_r = rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 0
 
 col1.markdown(render_custom_metric("현재가", latest_close, is_price=True), unsafe_allow_html=True)
-col2.metric("변동 수익률", f"{returns.iloc[-1]*100:.2f}%")
+col2.metric("변동 수익률", f"{latest_ret*100:.2f}%")
 col3.metric("최근 거래량", f"{latest_vol:,.0f} 주")
-col4.metric(f"변동성 ({vol_window}주기)", f"{volatility.iloc[-1]:.2f}%")
-col5.metric("RSI (14주기)", f"{rsi.iloc[-1]:.1f}")
+col4.metric(f"변동성 ({vol_window}주기)", f"{latest_v:.2f}%")
+col5.metric("RSI (14주기)", f"{latest_r:.1f}")
 
 
 # --- 4. 가격 차트 ---
@@ -243,4 +262,4 @@ with c2:
     fig_r.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="과매도")
     st.plotly_chart(fig_r, use_container_width=True)
 
-st.caption("데이터: Yahoo Finance | 지표 계산: gs-quant timeseries")
+st.caption("데이터: Yahoo Finance | 지표 계산: gs-quant timeseries / pandas")
