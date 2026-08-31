@@ -1,26 +1,44 @@
-"""
-개인용 주식 분석 대시보드
-실행: streamlit run dashboard.py
-브라우저에서 http://localhost:8501 로 접속됩니다 (나만 볼 수 있음).
-"""
-
 import streamlit as st
 import pandas as pd
 import yfinance as yf
 import gs_quant.timeseries as ts
 from gs_quant.timeseries import Window
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="나만의 커스텀 주식 대시보드", layout="wide")
 st.title("📊 나만의 맞춤형 주식 분석 대시보드")
 
+# --- 나스닥 주요 종목 사전 정의 ---
+NASDAQ_TOP_STOCKS = {
+    "애플 (AAPL)": "AAPL",
+    "엔비디아 (NVDA)": "NVDA",
+    "마이크로소프트 (MSFT)": "MSFT",
+    "테슬라 (TSLA)": "TSLA",
+    "알파벳/구글 (GOOGL)": "GOOGL",
+    "아마존 (AMZN)": "AMZN",
+    "메타 (META)": "META",
+    "브로드컴 (AVGO)": "AVGO",
+    "AMD (AMD)": "AMD",
+    "넷플릭스 (NFLX)": "NFLX",
+    "나스닥 100 지수 ETF (QQQ)": "QQQ",
+    "S&P 500 지수 ETF (SPY)": "SPY"
+}
+
 # --- 사이드바: 기본 설정 ---
-st.sidebar.header("⚙️ 기본 설정")
-ticker_symbol = st.sidebar.text_input("종목 티커 (예: AAPL, 005930.KS, ^KS11)", value="AAPL")
+st.sidebar.header("⚙️ 종목 및 기본 설정")
+
+# 종목 선택 방식 선택
+search_mode = st.sidebar.radio("종목 검색 방식", ["주요 나스닥 종목 선택", "티커 직접 입력"])
+
+if search_mode == "주요 나스닥 종목 선택":
+    selected_name = st.sidebar.selectbox("나스닥 인기 종목", list(NASDAQ_TOP_STOCKS.keys()))
+    ticker_symbol = NASDAQ_TOP_STOCKS[selected_name]
+else:
+    ticker_symbol = st.sidebar.text_input("종목 티커 직접 입력 (예: TSLA, 005930.KS)", value="AAPL")
+
 period = st.sidebar.selectbox("조회 기간", ["3mo", "6mo", "1y", "2y", "5y"], index=2)
 
-# --- 사이드바: 위젯/차트 선택 (On/Off) ---
+# --- 사이드바: 화면 표시 설정 (On/Off) ---
 st.sidebar.header("👁️ 화면 표시 설정")
 show_fundamental = st.sidebar.checkbox("재무제표 및 주요 투자지표", value=True)
 show_consensus = st.sidebar.checkbox("월가 컨센서스 (목표주가)", value=True)
@@ -55,12 +73,12 @@ volatility = ts.volatility(close, Window(vol_window, 0))
 moving_avg = ts.moving_average(close, ma_window)
 rsi = ts.relative_strength_index(close, 14)
 
-# 볼린저 밴드 계산
+# 볼린저 밴드
 std = close.rolling(window=ma_window).std()
 bollinger_upper = moving_avg + (std * 2)
 bollinger_lower = moving_avg - (std * 2)
 
-# MACD 계산 (12일, 26일, 9일)
+# MACD
 ema12 = close.ewm(span=12, adjust=False).mean()
 ema26 = close.ewm(span=26, adjust=False).mean()
 macd = ema12 - ema26
@@ -68,9 +86,9 @@ macd_signal = macd.ewm(span=9, adjust=False).mean()
 macd_hist = macd - macd_signal
 
 
-# --- 1. 주요 투자지표 & 컨센서스 섹션 ---
+# --- 1. 주요 투자지표 & 컨센서스 ---
 if show_fundamental or show_consensus:
-    st.subheader("📌 기업 분석 & 컨센서스")
+    st.subheader(f"📌 {info.get('shortName', ticker_symbol)} - 기업 분석 & 컨센서스")
     cols = st.columns(5)
     col_idx = 0
 
@@ -81,8 +99,6 @@ if show_fundamental or show_consensus:
         col_idx = 3
 
     if show_consensus:
-        if col_idx > 3:
-            st.warning("표시 항목이 많아 하단에 나열됩니다.")
         cols[col_idx].metric("목표주가 (평균)", f"${info.get('targetMeanPrice', 0):.2f}" if info.get('targetMeanPrice') else "N/A")
         cols[col_idx+1].metric("투자의견", f"{info.get('recommendationKey', 'N/A').upper()}")
 
@@ -97,7 +113,7 @@ col3.metric(f"{vol_window}일 변동성", f"{volatility.iloc[-1]:.2f}%")
 col4.metric("RSI (14일)", f"{rsi.iloc[-1]:.1f}")
 
 
-# --- 3. 가격 차트 (볼린저 밴드 선택 가능) ---
+# --- 3. 가격 차트 ---
 st.subheader("📈 가격 추이 & 기술적 지표")
 fig_price = go.Figure()
 fig_price.add_trace(go.Scatter(x=close.index, y=close, name="종가", line=dict(color="blue")))
