@@ -93,22 +93,19 @@ if data.empty:
 close = data["Close"]
 volume = data["Volume"]
 
-# --- 안전한 지표 계산 (분봉/일봉 에러 방지 분기) ---
+# --- 안전한 지표 계산 ---
 returns = close.pct_change()
 
-# 일봉일 때는 gs-quant 연율화 변동성 사용, 분봉일 때는 일반 표준편차 변동성 사용
 if interval == "1d":
     try:
         volatility = ts.volatility(close, Window(vol_window, 0))
     except:
         volatility = returns.rolling(window=vol_window).std() * np.sqrt(252) * 100
 else:
-    # 분봉의 경우 수익률 표준편차 계산
     volatility = returns.rolling(window=vol_window).std() * 100
 
 moving_avg = close.rolling(window=ma_window).mean()
 
-# RSI 안전 계산
 delta = close.diff()
 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -189,12 +186,14 @@ if show_financials_table:
             else:
                 df_fin_display = df_fin.applymap(fmt_val)
             
-            df_fin_display.index = df_fin_display.index.map({
+            # 한글 이름 변경 안전 처리 (TypeError 방지)
+            rename_dict = {
                 "Total Revenue": "매출액",
                 "Operating Income": "영업이익",
                 "Net Income": "당기순이익",
                 "EBITDA": "EBITDA"
-            }).fillna(df_fin_display.index.to_series())
+            }
+            df_fin_display = df_fin_display.rename(index=rename_dict)
             
             st.dataframe(df_fin_display, use_container_width=True)
         else:
