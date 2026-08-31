@@ -27,7 +27,6 @@ NASDAQ_TOP_STOCKS = {
 # --- 사이드바: 기본 설정 ---
 st.sidebar.header("⚙️ 종목 및 기본 설정")
 
-# 종목 선택 방식 선택
 search_mode = st.sidebar.radio("종목 검색 방식", ["주요 나스닥 종목 선택", "티커 직접 입력"])
 
 if search_mode == "주요 나스닥 종목 선택":
@@ -44,28 +43,33 @@ show_fundamental = st.sidebar.checkbox("재무제표 및 주요 투자지표", v
 show_consensus = st.sidebar.checkbox("월가 컨센서스 (목표주가)", value=True)
 show_bollinger = st.sidebar.checkbox("볼린저 밴드 표시", value=True)
 show_macd = st.sidebar.checkbox("MACD 차트 표시", value=False)
-show_volume = st.sidebar.checkbox("거래량 차트 표시", value=True)
 
 # --- 사이드바: 세부 파라미터 ---
 st.sidebar.header("📐 지표 파라미터")
 ma_window = st.sidebar.slider("이동평균 기간 (일)", 5, 120, 20)
 vol_window = st.sidebar.slider("변동성 계산 기간 (일)", 5, 120, 22)
 
-# --- 데이터 로드 ---
+# --- 데이터 및 실시간 환율 로드 ---
 @st.cache_data(ttl=3600)
-def get_stock_data(symbol, p):
+def get_stock_and_fx_data(symbol, p):
     t = yf.Ticker(symbol)
     hist = t.history(period=p)
     info = t.info
-    return hist, info
+    
+    # 원/달러 환율 가져오기
+    fx_hist = yf.Ticker("USDKRW=X").history(period="1d")
+    fx_rate = fx_hist["Close"].iloc[-1] if not fx_hist.empty else 1350.0
+    
+    return hist, info, fx_rate
 
-data, info = get_stock_data(ticker_symbol, period)
+data, info, usd_krw = get_stock_and_fx_data(ticker_symbol, period)
 
 if data.empty:
     st.error("데이터를 불러오지 못했습니다. 티커를 다시 확인해 주세요.")
     st.stop()
 
 close = data["Close"]
+volume = data["Volume"]
 
 # --- gs-quant 및 지표 계산 ---
 returns = ts.returns(close)
@@ -85,6 +89,18 @@ macd = ema12 - ema26
 macd_signal = macd.ewm(span=9, adjust=False).mean()
 macd_hist = macd - macd_signal
 
+# --- 원화 환산 도우미 함수 ---
+is_korean_stock = ticker_symbol.endswith(".KS") or ticker_symbol.endswith(".KQ")
+
+def fmt_price(val):
+    if pd.isna(val) or val == 0:
+        return "N/A"
+    if is_korean_stock:
+        return f"₩{val:,.0f}"
+    else:
+        krw_val = val * usd_krw
+        return f"${val:,.2f} (₩{krw_val:,.0f})"
+
 
 # --- 1. 주요 투자지표 & 컨센서스 ---
 if show_fundamental or show_consensus:
@@ -93,24 +109,32 @@ if show_fundamental or show_consensus:
     col_idx = 0
 
     if show_fundamental:
-        cols[0].metric("시가총액", f"${info.get('marketCap', 0):,}" if info.get('marketCap') else "N/A")
+        mcap = info.get('marketCap', 0)
+        mcap_str = f"₩{mcap:,.0f}" if is_korean_stock else f"${mcap:,.0f} (₩{mcap*usd_krw:,.0f})" if mcap else "N/A"
+        cols[0].metric("시가총액", mcap_str)
         cols[1].metric("PER", f"{info.get('trailingPE', 0):.2f}" if info.get('trailingPE') else "N/A")
         cols[2].metric("PBR", f"{info.get('priceToBook', 0):.2f}" if info.get('priceToBook') else "N/A")
         col_idx = 3
 
     if show_consensus:
-        cols[col_idx].metric("목표주가 (평균)", f"${info.get('targetMeanPrice', 0):.2f}" if info.get('targetMeanPrice') else "N/A")
+        target_p = info.get('targetMeanPrice', 0)
+        cols[col_idx].metric("목표주가 (평균)", fmt_price(target_p))
         cols[col_idx+1].metric("투자의견", f"{info.get('recommendationKey', 'N/A').upper()}")
 
     st.markdown("---")
 
 
-# --- 2. 상단 핵심 수치 요약 ---
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("현재가", f"${close.iloc[-1]:.2f}")
+# --- 2. 상단 핵심 수치 요약 (거래량 숫자 표기 포함) ---
+col1, col2, col3, col4, col5 = st.columns(5)
+
+latest_close = close.iloc[-1]
+latest_vol = volume.iloc[-1]
+
+col1.metric("현재가", fmt_price(latest_close))
 col2.metric("일일 수익률", f"{returns.iloc[-1]*100:.2f}%")
-col3.metric(f"{vol_window}일 변동성", f"{volatility.iloc[-1]:.2f}%")
-col4.metric("RSI (14일)", f"{rsi.iloc[-1]:.1f}")
+col3.metric("최근 거래량", f"{latest_vol:,.0f} 주")
+col4.metric(f"{vol_window}일 변동성", f"{volatility.iloc[-1]:.2f}%")
+col5.metric("RSI (14일)", f"{rsi.iloc[-1]:.1f}")
 
 
 # --- 3. 가격 차트 ---
@@ -127,14 +151,7 @@ fig_price.update_layout(height=450, margin=dict(l=20, r=20, t=20, b=20))
 st.plotly_chart(fig_price, use_container_width=True)
 
 
-# --- 4. 선택형 서브 차트 (거래량 / MACD) ---
-if show_volume:
-    st.subheader("📊 거래량")
-    fig_vol = go.Figure()
-    fig_vol.add_trace(go.Bar(x=data.index, y=data["Volume"], name="거래량", marker_color="teal"))
-    fig_vol.update_layout(height=250, margin=dict(l=20, r=20, t=20, b=20))
-    st.plotly_chart(fig_vol, use_container_width=True)
-
+# --- 4. MACD 차트 (선택 시) ---
 if show_macd:
     st.subheader("📉 MACD (이동평균 수렴·확산)")
     fig_macd = go.Figure()
