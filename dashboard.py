@@ -35,10 +35,9 @@ if search_mode == "주요 나스닥 종목 선택":
 else:
     ticker_symbol = st.sidebar.text_input("종목 티커 직접 입력 (예: TSLA, 005930.KS)", value="AAPL")
 
-# --- 데이터 주기 및 조회 기간 설정 (분봉 추가) ---
+# --- 데이터 주기 및 조회 기간 설정 ---
 interval_choice = st.sidebar.selectbox("데이터 주기 (봉)", ["1일 (일봉)", "1분봉", "5분봉", "15분봉"])
 
-# 주기별 조회 기간 제한
 if interval_choice == "1분봉":
     interval = "1m"
     period_options = ["1d", "5d"]
@@ -68,7 +67,7 @@ ma_window = st.sidebar.slider("이동평균 기간", 5, 120, 20)
 vol_window = st.sidebar.slider("변동성 계산 기간", 5, 120, 22)
 
 # --- 데이터 및 실시간 환율 로드 ---
-@st.cache_data(ttl=60) # 분봉 조회를 위해 캐시 타임을 60초로 짧게 설정
+@st.cache_data(ttl=60)
 def get_stock_and_fx_data(symbol, p, inv):
     t = yf.Ticker(symbol)
     hist = t.history(period=p, interval=inv)
@@ -163,10 +162,16 @@ if show_financials_table:
             df_fin = financials.loc[existing_items].copy()
             df_fin.columns = [col.strftime('%Y') if hasattr(col, 'strftime') else str(col) for col in df_fin.columns]
             
-            if is_korean_stock:
-                df_fin_display = df_fin.applymap(lambda x: f"₩{x/1e8:,.0f} 억" if pd.notnull(x) else "N/A")
+            # Pandas 최신버전 호환성 수정 (applymap -> map / apply 호환 처리)
+            def fmt_val(x):
+                if pd.notnull(x):
+                    return f"₩{x/1e8:,.0f} 억" if is_korean_stock else f"${x/1e6:,.1f}M (₩{x*usd_krw/1e8:,.0f}억)"
+                return "N/A"
+
+            if hasattr(df_fin, "map"):
+                df_fin_display = df_fin.map(fmt_val)
             else:
-                df_fin_display = df_fin.applymap(lambda x: f"${x/1e6:,.1f}M (₩{x*usd_krw/1e8:,.0f}억)" if pd.notnull(x) else "N/A")
+                df_fin_display = df_fin.applymap(fmt_val)
             
             df_fin_display.index = df_fin_display.index.map({
                 "Total Revenue": "매출액",
