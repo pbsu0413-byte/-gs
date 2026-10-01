@@ -68,13 +68,14 @@ ma_window = st.sidebar.slider("이동평균 기간", 5, 120, 20)
 vol_window = st.sidebar.slider("변동성 계산 기간", 5, 120, 22)
 
 # --- 데이터 및 실시간 환율 로드 ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10) # 테스트 시 빠른 반영을 위해 캐시 시간 조정
 def get_stock_and_fx_data(symbol, p, inv):
     t = yf.Ticker(symbol)
     hist = t.history(period=p, interval=inv)
     
-    # safe_info 수집
     info = {}
+    
+    # 1. 기본 info 시도
     try:
         raw_info = t.info
         if isinstance(raw_info, dict):
@@ -82,21 +83,44 @@ def get_stock_and_fx_data(symbol, p, inv):
     except Exception:
         pass
 
-    # fast_info 활용 (시가총액 등 기본 데이터 안전 보장)
+    # 2. fast_info 보완 (시가총액, 종목명 등)
     try:
         fast_info = t.fast_info
-        if 'marketCap' not in info or not info['marketCap']:
+        if not info.get('marketCap'):
             info['marketCap'] = getattr(fast_info, 'market_cap', 0)
-        if 'shortName' not in info:
+        if not info.get('shortName') or info.get('shortName') == 'USD':
             info['shortName'] = getattr(fast_info, 'currency', symbol)
     except Exception:
         pass
 
+    # 3. 컨센서스/목표주가 보완 (info에 없는 경우 대비)
+    if not info.get('targetMeanPrice'):
+        try:
+            apt = t.analyst_price_targets
+            if isinstance(apt, dict) and 'current' in apt:
+                info['targetMeanPrice'] = apt['current']
+            elif hasattr(apt, 'get'):
+                info['targetMeanPrice'] = apt.get('mean', 0)
+        except Exception:
+            pass
+
+    if not info.get('recommendationKey') or info.get('recommendationKey') == 'N/A':
+        try:
+            rec = t.recommendations_summary
+            if not rec.empty and 'recommendationKey' in rec.columns:
+                info['recommendationKey'] = rec['recommendationKey'].iloc[0]
+            elif hasattr(t, 'info') and 'recommendationKey' in t.info:
+                info['recommendationKey'] = t.info.get('recommendationKey', 'N/A')
+        except Exception:
+            pass
+
+    # 4. 재무제표
     try:
         financials = t.financials
     except Exception:
         financials = pd.DataFrame()
 
+    # 5. 환율
     try:
         fx_hist = yf.Ticker("USDKRW=X").history(period="1d")
         fx_rate = fx_hist["Close"].iloc[-1] if not fx_hist.empty else 1350.0
