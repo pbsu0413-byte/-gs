@@ -72,15 +72,36 @@ vol_window = st.sidebar.slider("변동성 계산 기간", 5, 120, 22)
 def get_stock_and_fx_data(symbol, p, inv):
     t = yf.Ticker(symbol)
     hist = t.history(period=p, interval=inv)
-    info = t.info
     
+    # safe_info 수집
+    info = {}
+    try:
+        raw_info = t.info
+        if isinstance(raw_info, dict):
+            info.update(raw_info)
+    except Exception:
+        pass
+
+    # fast_info 활용 (시가총액 등 기본 데이터 안전 보장)
+    try:
+        fast_info = t.fast_info
+        if 'marketCap' not in info or not info['marketCap']:
+            info['marketCap'] = getattr(fast_info, 'market_cap', 0)
+        if 'shortName' not in info:
+            info['shortName'] = getattr(fast_info, 'currency', symbol)
+    except Exception:
+        pass
+
     try:
         financials = t.financials
-    except:
+    except Exception:
         financials = pd.DataFrame()
 
-    fx_hist = yf.Ticker("USDKRW=X").history(period="1d")
-    fx_rate = fx_hist["Close"].iloc[-1] if not fx_hist.empty else 1350.0
+    try:
+        fx_hist = yf.Ticker("USDKRW=X").history(period="1d")
+        fx_rate = fx_hist["Close"].iloc[-1] if not fx_hist.empty else 1350.0
+    except Exception:
+        fx_rate = 1350.0
     
     return hist, info, financials, fx_rate
 
